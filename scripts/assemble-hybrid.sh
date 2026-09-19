@@ -77,6 +77,100 @@ if old not in s:
 p.write_text(s.replace(old, new, 1))
 PY
 
+# Adapt PR599's Demon’s Souls compute-chain changes to the current PR500/f100
+# DispatchDirect API. PR500 added indirect_args and expanded meta-clear inputs;
+# PR599's older implementation used pre-resolved indirect_buffer/offset variables.
+python3 - <<'PY'
+from pathlib import Path
+
+p = Path("src/graphics/host_gpu/renderer/renderCompute.cpp")
+s = p.read_text()
+
+old_meta = """bool RenderExecutor::TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input,
+                                                 const CommandBuffer&          buffer) {"""
+new_meta = """bool RenderExecutor::TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input,
+                                                 const CommandBuffer& buffer, uint32_t group_x,
+                                                 uint32_t group_y, uint32_t group_z,
+                                                 uint32_t mode) {"""
+if old_meta in s:
+    s = s.replace(old_meta, new_meta, 1)
+
+old_dispatch = """void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
+                                     uint32_t thread_group_x, uint32_t thread_group_y,
+                                     uint32_t thread_group_z, uint32_t mode) {"""
+new_dispatch = """void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
+                                     uint32_t thread_group_x, uint32_t thread_group_y,
+                                     uint32_t thread_group_z, uint32_t mode,
+                                     uint64_t indirect_args) {"""
+if old_dispatch not in s:
+    raise SystemExit("expected DispatchDirect f100 signature not found")
+s = s.replace(old_dispatch, new_dispatch, 1)
+
+# Direct-only early exits must not discard an indirect dispatch whose group counts
+# are supplied by the guest argument buffer.
+s = s.replace(
+    "if (thread_group_x == 0 || thread_group_y == 0 || thread_group_z == 0) {",
+    "if (indirect_args == 0 && (thread_group_x == 0 || thread_group_y == 0 || thread_group_z == 0)) {",
+    1,
+)
+
+# If the f100 meta-clear call survived the merge, update it to PR500's API.
+s = s.replace(
+    "if (TryConsumeComputeMetaClear(input_info, buffer)) {",
+    "if (indirect_args == 0 && TryConsumeComputeMetaClear(input_info, buffer, thread_group_x,\n"
+    "                                                     thread_group_y, thread_group_z, mode)) {",
+    1,
+)
+
+old_indirect = """if (indirect_args != 0) {
+		vk::BufferMemoryBarrier args_barrier {};
+		args_barrier.sType         = vk::StructureType::eBufferMemoryBarrier;
+		args_barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite |
+		                             vk::AccessFlagBits::eTransferWrite |
+		                             vk::AccessFlagBits::eMemoryWrite;
+		args_barrier.dstAccessMask       = vk::AccessFlagBits::eIndirectCommandRead;
+		args_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		args_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		args_barrier.buffer              = indirect_buffer;
+		args_barrier.offset              = indirect_offset;
+		args_barrier.size                = 3u * sizeof(uint32_t);
+		if (!continues_chain) vk_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+		                          vk::PipelineStageFlagBits::eDrawIndirect,
+		                          vk::DependencyFlags {}, 0, nullptr, 1, &args_barrier, 0, nullptr);
+		vk_buffer.dispatchIndirect(indirect_buffer, indirect_offset);
+	} else {
+		vk_buffer.dispatch(thread_group_x, thread_group_y, thread_group_z);
+	}"""
+new_indirect = """if (indirect_args != 0) {
+		auto [args_buffer, args_offset] = m_context.GetBufferCache().ObtainBuffer(
+		    indirect_args, 3u * sizeof(uint32_t), false, false, BufferId {});
+		vk::BufferMemoryBarrier args_barrier {};
+		args_barrier.sType         = vk::StructureType::eBufferMemoryBarrier;
+		args_barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite |
+		                             vk::AccessFlagBits::eTransferWrite |
+		                             vk::AccessFlagBits::eMemoryWrite;
+		args_barrier.dstAccessMask       = vk::AccessFlagBits::eIndirectCommandRead;
+		args_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		args_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		args_barrier.buffer              = args_buffer->Handle();
+		args_barrier.offset              = args_offset;
+		args_barrier.size                = 3u * sizeof(uint32_t);
+		if (!continues_chain) {
+			vk_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+			                          vk::PipelineStageFlagBits::eDrawIndirect,
+			                          vk::DependencyFlags {}, 0, nullptr, 1, &args_barrier, 0, nullptr);
+		}
+		vk_buffer.dispatchIndirect(args_buffer->Handle(), args_offset);
+	} else {
+		vk_buffer.dispatch(thread_group_x, thread_group_y, thread_group_z);
+	}"""
+if old_indirect not in s:
+    raise SystemExit("expected PR599 indirect-dispatch block not found")
+s = s.replace(old_indirect, new_indirect, 1)
+
+p.write_text(s)
+PY
+
 echo
 echo "Hybrid source assembled at:"
 git rev-parse HEAD
