@@ -86,25 +86,36 @@ from pathlib import Path
 p = Path("src/graphics/host_gpu/renderer/renderCompute.cpp")
 s = p.read_text()
 
-old_meta = """bool RenderExecutor::TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input,
-                                                 const CommandBuffer&          buffer) {"""
-new_meta = """bool RenderExecutor::TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input,
-                                                 const CommandBuffer& buffer, uint32_t group_x,
-                                                 uint32_t group_y, uint32_t group_z,
-                                                 uint32_t mode) {"""
-if old_meta in s:
-    s = s.replace(old_meta, new_meta, 1)
+import re
 
-old_dispatch = """void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
-                                     uint32_t thread_group_x, uint32_t thread_group_y,
-                                     uint32_t thread_group_z, uint32_t mode) {"""
-new_dispatch = """void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
-                                     uint32_t thread_group_x, uint32_t thread_group_y,
-                                     uint32_t thread_group_z, uint32_t mode,
-                                     uint64_t indirect_args) {"""
-if old_dispatch not in s:
-    raise SystemExit("expected DispatchDirect f100 signature not found")
-s = s.replace(old_dispatch, new_dispatch, 1)
+meta_pattern = re.compile(
+    r"bool RenderExecutor::TryConsumeComputeMetaClear\(const ShaderComputeInputInfo& input,\s*"
+    r"const CommandBuffer&\s+buffer\) \{"
+)
+s, meta_count = meta_pattern.subn(
+    "bool RenderExecutor::TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input,\n"
+    "                                                 const CommandBuffer& buffer, uint32_t group_x,\n"
+    "                                                 uint32_t group_y, uint32_t group_z,\n"
+    "                                                 uint32_t mode) {",
+    s,
+    count=1,
+)
+
+dispatch_pattern = re.compile(
+    r"void RenderExecutor::DispatchDirect\(uint64_t submit_id, CommandBuffer& buffer,\s*"
+    r"uint32_t thread_group_x, uint32_t thread_group_y,\s*"
+    r"uint32_t thread_group_z, uint32_t mode\) \{"
+)
+s, dispatch_count = dispatch_pattern.subn(
+    "void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,\n"
+    "                                     uint32_t thread_group_x, uint32_t thread_group_y,\n"
+    "                                     uint32_t thread_group_z, uint32_t mode,\n"
+    "                                     uint64_t indirect_args) {",
+    s,
+    count=1,
+)
+if dispatch_count != 1:
+    raise SystemExit(f"expected one DispatchDirect signature, patched {dispatch_count}")
 
 # Direct-only early exits must not discard an indirect dispatch whose group counts
 # are supplied by the guest argument buffer.
