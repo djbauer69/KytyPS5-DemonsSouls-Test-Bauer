@@ -182,6 +182,62 @@ s = s.replace(old_indirect, new_indirect, 1)
 p.write_text(s)
 PY
 
+# Port PR599's sampled mip-view clamping onto the newer f100f78 descriptor
+# implementation. Keep the physical allocation at MaxMip+1 and clamp ordinary
+# sampled views to that allocation instead of growing the image and changing
+# the PS5 tiled layout.
+python3 - <<'PY'
+from pathlib import Path
+
+p = Path("src/graphics/host_gpu/renderer/pipeline/descriptors.cpp")
+s = p.read_text()
+
+old_levels = """	const auto physical_levels = multisampled ? 1u : static_cast<uint32_t>(max_mip) + 1u;
+	const auto levels =
+	    multisampled ? 1u : std::max(physical_levels, static_cast<uint32_t>(last_level) + 1u);
+"""
+new_levels = """	const auto physical_levels = multisampled ? 1u : static_cast<uint32_t>(max_mip) + 1u;
+	const auto levels          = physical_levels;
+	const bool dynamic_storage =
+	    storage && resource.mip_mode == ShaderRecompiler::IR::ImageMipMode::DynamicStorage;
+	const auto view_last_level =
+	    !multisampled && !dynamic_storage ? std::min(last_level, max_mip) : last_level;
+"""
+if old_levels not in s:
+    raise SystemExit("f100 mip-level block not found")
+s = s.replace(old_levels, new_levels, 1)
+
+old_validate = """	if ((!multisampled && base_level > last_level) ||
+	    (multisampled &&
+"""
+new_validate = """	if ((!multisampled && (base_level > view_last_level || view_last_level >= levels)) ||
+	    (multisampled &&
+"""
+if old_validate not in s:
+    raise SystemExit("f100 mip validation block not found")
+s = s.replace(old_validate, new_validate, 1)
+
+old_view = """	const auto view_levels =
+	    multisampled ? 1u : static_cast<uint32_t>(last_level - base_level) + 1u;
+"""
+new_view = """	const auto view_levels =
+	    multisampled ? 1u : static_cast<uint32_t>(view_last_level - base_level) + 1u;
+"""
+if old_view not in s:
+    raise SystemExit("f100 view-level block not found")
+s = s.replace(old_view, new_view, 1)
+
+start = s.find("	if (levels > physical_levels) {")
+if start == -1:
+    raise SystemExit("f100 physical-layout expansion guard not found")
+end = s.find("	uint32_t      pitch = 0;", start)
+if end == -1:
+    raise SystemExit("f100 physical-layout guard end not found")
+s = s[:start] + s[end:]
+
+p.write_text(s)
+PY
+
 # Port the two tiny generic helpers required by PR599's Demon’s Souls adapters
 # onto the f100f78 interfaces, without importing PR599's broader generic series.
 python3 - <<'PY'
