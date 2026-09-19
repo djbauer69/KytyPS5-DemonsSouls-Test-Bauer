@@ -34,7 +34,7 @@ jobs:
       - name: Configure
         shell: bash
         working-directory: kyty
-        run: cmake -S . -B _Build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=djbauer69/KytyPS5-DemonsSouls-Test-Bauer -DKYTY_RELEASE_TAG=DemonsHybrid-f100f78-pr500-pr599 -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH="$Qt6_DIR"
+        run: cmake -S . -B _Build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=djbauer69/KytyPS5-DemonsSouls-Test-Bauer -DKYTY_RELEASE_TAG=DemonsHybrid-f100f78-pr500-pr599 -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH="$Qt6_DIR"
 
       - name: Build
         shell: bash
