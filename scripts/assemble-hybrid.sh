@@ -48,8 +48,8 @@ git remote add pr599 https://github.com/chenxiao07/KytyPS5.git
 git fetch pr599 submission/reference-demons-souls-20260913
 
 echo "Applying PR599 Demon’s Souls-specific adapters."
-git cherry-pick "$PR599_DS_1"
-git cherry-pick "$PR599_DS_2"
+git cherry-pick -X theirs "$PR599_DS_1"
+git cherry-pick -X theirs "$PR599_DS_2"
 
 echo
 echo "Hybrid source assembled at:"
