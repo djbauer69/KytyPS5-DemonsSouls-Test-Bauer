@@ -1,0 +1,70 @@
+name: Build Demon Souls Hybrid
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+
+      - name: Assemble hybrid source
+        shell: bash
+        run: bash scripts/assemble-hybrid.sh
+
+      - name: Install dependencies
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends --yes clang glslang-tools libasound2-dev libdbus-1-dev libgl1-mesa-dev libpulse-dev libudev-dev libwayland-dev libx11-dev libxcursor-dev libxext-dev libxfixes-dev libxi-dev libxkbcommon-dev libxrandr-dev libxss-dev lld ninja-build pkg-config wayland-protocols
+
+      - name: Install Qt 6.10.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.10.3"
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
+
+      - name: Configure
+        shell: bash
+        working-directory: kyty
+        run: cmake -S . -B _Build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -DKYTY_BUILD_ORIGIN=Fork -DKYTY_BUILD_REPOSITORY=djbauer69/KytyPS5-DemonsSouls-Test-Bauer -DKYTY_RELEASE_TAG=DemonsHybrid-f100f78-pr500-pr599 -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH="$Qt6_DIR"
+
+      - name: Build
+        shell: bash
+        working-directory: kyty
+        run: cmake --build _Build/linux --target launcher --parallel
+
+      - name: Install
+        shell: bash
+        working-directory: kyty
+        run: cmake --install _Build/linux --prefix _Build/linux/install
+
+      - name: Verify binaries
+        shell: bash
+        working-directory: kyty
+        run: file _Build/linux/install/launcher && file _Build/linux/install/kyty_emulator && _Build/linux/install/kyty_emulator --help >/dev/null
+
+      - name: Add build metadata
+        shell: bash
+        working-directory: kyty
+        run: |
+          printf '%s\n'             'Base: official f100f785dafa108bbf5b40ea8e425e08236f981a'             'PR500: 629600b220969380748d6d3c07f326e8abbd74be'             'PR599 Demon Souls adapters: b2c60bdc0ce54d2edb4a97af11b0264b3015fec0 + fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7'             "Hybrid head: $(git rev-parse HEAD)"             > _Build/linux/install/HYBRID-BUILD.txt
+
+      - name: Package
+        shell: bash
+        working-directory: kyty
+        run: tar -C _Build/linux/install -czf "$GITHUB_WORKSPACE/KytyPS5-DemonsHybrid-f100f78-PR500-PR599-Linux-x86_64.tar.gz" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KytyPS5-DemonsHybrid-f100f78-PR500-PR599-Linux-x86_64
+          path: KytyPS5-DemonsHybrid-f100f78-PR500-PR599-Linux-x86_64.tar.gz
+          if-no-files-found: error
