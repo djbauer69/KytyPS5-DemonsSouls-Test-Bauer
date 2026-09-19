@@ -182,6 +182,79 @@ s = s.replace(old_indirect, new_indirect, 1)
 p.write_text(s)
 PY
 
+# Port the two tiny generic helpers required by PR599's Demon’s Souls adapters
+# onto the f100f78 interfaces, without importing PR599's broader generic series.
+python3 - <<'PY'
+from pathlib import Path
+
+# 1) Coherent host-write preparation: f100f78 already exposes the renderer's
+# InvalidateMemory path, so add the boolean wrapper expected by demonsSoulsCopy.
+h = Path("src/kernel/memory.h")
+hs = h.read_text()
+decl_anchor = "void                   InvalidateMemory(uint64_t vaddr, uint64_t size);\n"
+if "TryPrepareHostWrite" not in hs:
+    if decl_anchor not in hs:
+        raise SystemExit("memory.h insertion anchor not found")
+    hs = hs.replace(
+        decl_anchor,
+        decl_anchor + "bool                   TryPrepareHostWrite(uint64_t vaddr, uint64_t size);\n",
+        1,
+    )
+    h.write_text(hs)
+
+cpp = Path("src/kernel/memory.cpp")
+cs = cpp.read_text()
+if "bool TryPrepareHostWrite(uint64_t vaddr, uint64_t size)" not in cs:
+    impl_anchor = """void InvalidateMemory(uint64_t vaddr, uint64_t size) {
+	if (size == 0) {
+		return;
+	}
+	(void)GetGpuResources().InvalidateMemory(vaddr, size);
+}
+"""
+    if impl_anchor not in cs:
+        raise SystemExit("memory.cpp insertion anchor not found")
+    helper = impl_anchor + """
+bool TryPrepareHostWrite(uint64_t vaddr, uint64_t size) {
+	return g_gpu_resources != nullptr && IsGpuAddressRange(vaddr, size) &&
+	       g_gpu_resources->InvalidateMemory(vaddr, size);
+}
+"""
+    cs = cs.replace(impl_anchor, helper, 1)
+    cpp.write_text(cs)
+
+# 2) PR599's idle-poll adapter specifically asks for a non-spinning short sleep.
+# Keep f100f78's existing high-resolution SleepMicro unchanged and add a separate
+# yielding path for this compatibility adapter.
+th = Path("src/common/threads.h")
+ths = th.read_text()
+if "SleepMicroWithoutSpinning" not in ths:
+    anchor = "\tstatic void SleepMicro(uint32_t micros);\n"
+    if anchor not in ths:
+        raise SystemExit("threads.h insertion anchor not found")
+    ths = ths.replace(
+        anchor,
+        anchor + "\tstatic void SleepMicroWithoutSpinning(uint32_t micros);\n",
+        1,
+    )
+    th.write_text(ths)
+
+tc = Path("src/common/threads.cpp")
+tcs = tc.read_text()
+if "void Thread::SleepMicroWithoutSpinning" not in tcs:
+    anchor = """void Thread::SleepNano(uint64_t nanos) {
+"""
+    if anchor not in tcs:
+        raise SystemExit("threads.cpp insertion anchor not found")
+    helper = """void Thread::SleepMicroWithoutSpinning(uint32_t micros) {
+	std::this_thread::sleep_for(std::chrono::microseconds(micros));
+}
+
+"""
+    tcs = tcs.replace(anchor, helper + anchor, 1)
+    tc.write_text(tcs)
+PY
+
 echo
 echo "Hybrid source assembled at:"
 git rev-parse HEAD
