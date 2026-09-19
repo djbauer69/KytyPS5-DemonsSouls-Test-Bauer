@@ -31,6 +31,10 @@ jobs:
           arch: linux_gcc_64
           cache: true
 
+      - name: Verify depth feedback policy
+        shell: bash
+        run: python3 scripts/check-depth-feedback.py kyty --compiler clang++
+
       - name: Configure
         shell: bash
         working-directory: kyty
@@ -55,7 +59,15 @@ jobs:
         shell: bash
         working-directory: kyty
         run: |
-          printf '%s\n'             'Base: official f100f785dafa108bbf5b40ea8e425e08236f981a'             'PR500: 629600b220969380748d6d3c07f326e8abbd74be'             'PR599 Demon Souls adapters: b2c60bdc0ce54d2edb4a97af11b0264b3015fec0 + fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7'             "Hybrid head: $(git rev-parse HEAD)"             > _Build/linux/install/HYBRID-BUILD.txt
+          printf '%s\n' \
+            'Base: official f100f785dafa108bbf5b40ea8e425e08236f981a' \
+            'PR500: 629600b220969380748d6d3c07f326e8abbd74be' \
+            'PR599 Demon Souls adapters: b2c60bdc0ce54d2edb4a97af11b0264b3015fec0 + fbcc0c6914a9e76ae5dc52358b935657dcfcb7d7' \
+            "Hybrid head: $(git rev-parse HEAD)" \
+            "Harness commit: $GITHUB_SHA" \
+            "Workflow run: $GITHUB_RUN_ID" \
+            'Compatibility patch: depth/stencil feedback across graphics stages' \
+            > _Build/linux/install/HYBRID-BUILD.txt
 
       - name: Package
         shell: bash

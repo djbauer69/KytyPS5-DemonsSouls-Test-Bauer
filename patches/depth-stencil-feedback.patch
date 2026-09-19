@@ -1,0 +1,112 @@
+--- a/src/graphics/host_gpu/renderer/pipeline/descriptors.cpp
++++ b/src/graphics/host_gpu/renderer/pipeline/descriptors.cpp
+@@ -867,6 +867,17 @@
+ 		const bool storage = binding.desc.type == TextureCache::BindingType::Storage;
+ 		image.usage.storage |= storage;
+ 		image.usage.texture |= !storage;
++		// Record the resolved host aspect, including stencil views associated with a
++		// depth image. AcquireRenderTargets consumes this across all graphics stages.
++		if (!storage) {
++			const auto host_view =
++			    std::ranges::find(image.views, binding.image_view, &CachedImageView::view);
++			EXIT_IF(host_view == image.views.end());
++			auto& sampled = program.stage == ShaderType::Pixel
++			                    ? image.binding.pixel_sampled_aspects
++			                    : image.binding.other_sampled_aspects;
++			sampled |= host_view->info.aspect;
++		}
+ 	}
+ }
+ 
+@@ -979,20 +990,24 @@
+ 					    std::ranges::find(image.views, binding.image_view, &CachedImageView::view);
+ 					EXIT_IF(storage || host_view == image.views.end());
+ 					const auto aspect = host_view->info.aspect;
+-					const bool depth_feedback =
++					const bool attachment_feedback =
+ 					    layout == vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT &&
+-					    program.stage == ShaderType::Pixel;
++					    pipeline_bind_point == vk::PipelineBindPoint::eGraphics;
+ 					const bool depth_read =
+-					    depth_feedback || layout == vk::ImageLayout::eDepthReadOnlyOptimal ||
++					    attachment_feedback || layout == vk::ImageLayout::eDepthReadOnlyOptimal ||
+ 					    layout == vk::ImageLayout::eDepthStencilReadOnlyOptimal ||
+ 					    layout == vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal;
+ 					const bool stencil_read =
+-					    layout == vk::ImageLayout::eStencilReadOnlyOptimal ||
++					    attachment_feedback || layout == vk::ImageLayout::eStencilReadOnlyOptimal ||
+ 					    layout == vk::ImageLayout::eDepthStencilReadOnlyOptimal ||
+ 					    layout == vk::ImageLayout::eDepthAttachmentStencilReadOnlyOptimal;
+ 					if ((aspect & vk::ImageAspectFlagBits::eDepth && !depth_read) ||
+ 					    (aspect & vk::ImageAspectFlagBits::eStencil && !stencil_read)) {
+-						EXIT("sampling a writable depth/stencil attachment aspect\n");
++						EXIT("sampling a writable depth/stencil attachment aspect: "
++						     "stage=%s aspect=0x%x layout=%u guest=0x%016" PRIx64 "\n",
++						     ShaderStageResourceName(program.stage),
++						     static_cast<uint32_t>(aspect), static_cast<uint32_t>(layout),
++						     image.info.data.address);
+ 					}
+ 				}
+ 				image.Transit(layout,
+--- a/src/graphics/host_gpu/renderer/renderDraw.cpp
++++ b/src/graphics/host_gpu/renderer/renderDraw.cpp
+@@ -556,37 +556,23 @@
+ 			EXIT("mixed color/depth sample counts are unsupported: %u and %u\n", attachment_samples,
+ 			     depth.desc.info.samples);
+ 		}
+-		const bool feedback = depth.depth_write_enable && pixel &&
+-		    std::ranges::any_of(pixel->images, [&](const TextureBinding& binding) {
+-			    if (binding.image_id != depth.image_id ||
+-			        binding.desc.type != TextureCache::BindingType::Texture) {
+-				    return false;
+-			    }
+-			    const auto native =
+-			        std::ranges::find(image.views, binding.image_view, &CachedImageView::view);
+-			    EXIT_IF(native == image.views.end());
+-			    const auto& sampled = native->info;
+-			    const auto& target = depth.desc.view_info;
+-			    return (sampled.aspect & vk::ImageAspectFlagBits::eDepth) &&
+-			           ImageRangeOverlaps(sampled.base_level, sampled.level_count,
+-			                              target.base_level, target.level_count) &&
+-			           ImageRangeOverlaps(sampled.base_layer, sampled.layer_count,
+-			                              target.base_layer, target.layer_count);
+-		    });
+-		if (feedback && !m_context.GetGraphics().attachment_feedback_loop_enabled) {
+-			EXIT("depth attachment feedback loop is not supported by the host\n");
+-		}
+-		auto layout = feedback ? vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT
+-		                       : depth_attachment_layout(depth);
++		// The cache shares an image between attachments and sampled views. Track
++		// both aspects in every graphics stage, conservatively across subresources.
++		// GENERAL alone does not enable a Vulkan attachment feedback loop.
+ 		auto writable = depth.AttachmentWriteAspects() & vk::ImageAspectFlagBits::eStencil;
+ 		if (depth.depth_write_enable) {
+ 			writable |= vk::ImageAspectFlagBits::eDepth;
+ 		}
+-		const auto pixel_writable = feedback ? writable & ~vk::ImageAspectFlagBits::eDepth : writable;
+-		if (static_cast<bool>(image.binding.pixel_sampled_aspects & pixel_writable) ||
+-		    static_cast<bool>(image.binding.other_sampled_aspects & writable)) {
+-			layout = vk::ImageLayout::eGeneral;
+-		}
++		const auto sampled = image.binding.pixel_sampled_aspects |
++		                     image.binding.other_sampled_aspects;
++		const bool feedback = static_cast<bool>(sampled & writable);
++		if (feedback && !m_context.GetGraphics().attachment_feedback_loop_enabled) {
++			EXIT("depth/stencil attachment feedback loop is not supported by the host: "
++			     "sampled=0x%x writable=0x%x\n",
++			     static_cast<uint32_t>(sampled), static_cast<uint32_t>(writable));
++		}
++		const auto layout = feedback ? vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT
++		                             : depth_attachment_layout(depth);
+ 		// The attachment store writes even when guest depth/stencil tests do not.
+ 		const auto access = vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+ 		                    vk::AccessFlagBits2::eDepthStencilAttachmentWrite;
+@@ -1190,7 +1176,7 @@
+ 		vk_buffer.setAttachmentFeedbackLoopEnableEXT(
+ 		    rendering.depth_stencil_attachment.image_layout ==
+ 		            vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT
+-		        ? vk::ImageAspectFlags {vk::ImageAspectFlagBits::eDepth}
++		        ? ImageViewOps::DepthAspectMask(state.depth_info.desc.view_info.format)
+ 		        : vk::ImageAspectFlags {});
+ 	}
+ 

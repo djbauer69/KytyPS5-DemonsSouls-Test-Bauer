@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+HARNESS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+
 BASE_SHA="f100f785dafa108bbf5b40ea8e425e08236f981a"
 PR500_SHA="629600b220969380748d6d3c07f326e8abbd74be"
 PR599_DS_1="b2c60bdc0ce54d2edb4a97af11b0264b3015fec0"
@@ -237,6 +239,11 @@ s = s[:start] + s[end:]
 
 p.write_text(s)
 PY
+
+# Keep sampled depth/stencil tracking and Vulkan feedback state consistent across
+# the retained f100 descriptors and PR500 render-target code.
+git apply --check "$HARNESS_DIR/patches/depth-stencil-feedback.patch"
+git apply "$HARNESS_DIR/patches/depth-stencil-feedback.patch"
 
 # Port the two tiny generic helpers required by PR599's Demon’s Souls adapters
 # onto the f100f78 interfaces, without importing PR599's broader generic series.
