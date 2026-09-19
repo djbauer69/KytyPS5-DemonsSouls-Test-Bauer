@@ -56,6 +56,27 @@ git cherry-pick -X theirs "$PR599_DS_2"
 # Remove that stale EXCLUDE_FROM_ALL target; it is not part of the emulator build.
 sed -i '/add_executable(page_protection_table_tests/,/target_include_directories(page_protection_table_tests/d' CMakeLists.txt
 
+# PR599's verified linear-copy shortcut depends on a generic alias-proof helper
+# that is not present in the f100f78 memory model. Preserve correctness by
+# declining that optimization; the original shader path remains the fallback.
+python3 - <<'PY'
+from pathlib import Path
+p = Path("src/graphics/host_gpu/renderer/demonsSouls.cpp")
+s = p.read_text()
+old = """\tif (!LibKernel::Memory::IsUniqueGuestBackingRange(src, bytes) ||
+\t    !LibKernel::Memory::IsUniqueGuestBackingRange(dst, bytes) ||
+\t    !LibKernel::Memory::IsUniqueGuestBackingRange(parameters.Base48(), 16))
+\t\treturn false;
+"""
+new = """\t// Hybrid base lacks PR599's generic physical-alias proof. Do not lower this
+\t// shader to a host copy unless that proof is available; use the original shader.
+\treturn false;
+"""
+if old not in s:
+    raise SystemExit("expected PR599 linear-copy alias guard not found")
+p.write_text(s.replace(old, new, 1))
+PY
+
 echo
 echo "Hybrid source assembled at:"
 git rev-parse HEAD
