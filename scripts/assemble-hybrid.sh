@@ -51,6 +51,11 @@ echo "Applying PR599 Demon’s Souls-specific adapters."
 git cherry-pick -X theirs "$PR599_DS_1"
 git cherry-pick -X theirs "$PR599_DS_2"
 
+# PR599's CMake conflict context carries a generic test target from its older parent
+# series, but this hybrid intentionally imports only the two Demon's Souls adapters.
+# Remove that stale EXCLUDE_FROM_ALL target; it is not part of the emulator build.
+sed -i '/add_executable(page_protection_table_tests/,/target_include_directories(page_protection_table_tests/d' CMakeLists.txt
+
 echo
 echo "Hybrid source assembled at:"
 git rev-parse HEAD
